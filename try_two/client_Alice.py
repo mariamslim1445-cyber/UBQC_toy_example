@@ -4,10 +4,20 @@ import random
 import json
 import socket
 import time
+import math
 
+
+# Initializations
 n, m = 2, 2  # 2x2 grid
-num_qubits = n * m
+num_qubits = n * m    # number of qubits
+D_X = [[], [0], [], [2]] #List of indices of X-dependencies
+D_Z = [[], [2], [], [0]] #List of indices of Z-dependencies
+phi_list = [np.pi/4, np.pi/4, np.pi/4, np.pi/4]
 seed = 30
+
+# Function to keep angles below 2pi
+def wrap_2pi_floor(x):
+    return x - math.floor(x / (2*math.pi)) * (2*math.pi)
 
 random.seed(seed)
 np.random.seed(seed)
@@ -60,16 +70,35 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
 
     cum_results = [] # array to save the results
     c = 0
-    for x in range(1, n+1):
-        for y in range(1, m+1):
+    for x in range(1, n+1):         # go through columns (layers)
+        for y in range(1, m+1):     # go through rows
+
+            print(f"Handling qubit {c}...")
 
             # Alice prepares measurement angle delta
-            phi_prime = 0
+
+                # compute phi_prime for determinism 
+            s_x = 0 # initialize the parity measurement for qubits in X_(x,y)
+            s_z = 0 # initialize the parity measurement for qubits in Z_(x,y)
+            for i in D_X[c]:
+                print(f"Added qubit {i} as an X dependency")
+                s_x = s_x ^ cum_results[i]   # apply the formula
+            print(f"s_x of qubit {c} is: {s_x} ") 
+            for i in D_Z[c]:
+                print(f"Added qubit {i} as an Z dependency")
+                s_z = s_z ^ cum_results[i]   # apply the formula
+            print(f"s_z of qubit {c} is: {s_z} ")
+            phi_prime = (-1)**(s_x) * phi_list[c] + s_x * np.pi
+            phi_prime = wrap_2pi_floor(phi_prime)
+            print(f"corresponding phi_prime: {phi_prime}")
+
+                # generate r
             r = random.choice([0,1])
             print(f"random r chosen: {r}")
 
+                # compute delta
             delta = theta_list[c] + phi_prime + np.pi*r / (2*np.pi)
-            c += 1
+            delta = wrap_2pi_floor(delta)
 
             # Alice sends delta to Bob
             s.sendall((json.dumps(delta) + "\n").encode())
@@ -86,4 +115,6 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             corrected_result = r ^ result
             cum_results.append(corrected_result)
             print(f"Corrected Result ({corrected_result}) saved\n")
+
+            c += 1
 
