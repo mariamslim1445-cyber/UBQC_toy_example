@@ -34,9 +34,13 @@ while True:
     num_qubits = len(reconstructed_states)
     print("Number of qubits:", num_qubits)
 
-    # Define brickwork edges (2x2 example)
-    edges = [(0,1),(0,2),(1,3),(2,3)]
-    n, m = 2, 2  # 2x2 grid
+    n, m = 2, 5  
+    edges = []
+    for i in range(2*m-2):
+        edges.append((i,i+2))
+    edges += [(4,5), (8,9)]
+    print(edges)
+
 
     # Create a device with num_qubits wires
     dev1 = qml.device("default.qubit", wires=num_qubits)

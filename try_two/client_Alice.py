@@ -8,11 +8,11 @@ import math
 
 
 # Initializations
-n, m = 2, 2  # 2x2 grid
+n, m = 2, 5  # 2x5 grid
 num_qubits = n * m    # number of qubits
-D_X = [[], [0], [], [2]] #List of indices of X-dependencies
-D_Z = [[], [2], [], [0]] #List of indices of Z-dependencies
-phi_list = [np.pi/4, np.pi/4, np.pi/4, np.pi/4]
+D_X = [[]]*(num_qubits) #List of indices of X-dependencies
+D_Z = [[]]*(num_qubits) #List of indices of Z-dependencies
+phi_list = [np.pi/4, 0, np.pi/4, 0, np.pi/4, 0, 0, 0, 0, 0]
 seed = 30
 
 # Function to keep angles below 2pi
