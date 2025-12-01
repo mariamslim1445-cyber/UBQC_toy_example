@@ -42,7 +42,6 @@ while True:
     print(edges)
 
 
-    # Create a device with num_qubits wires
     dev1 = qml.device("default.qubit", wires=num_qubits)
 
     @qml.qnode(dev1)
@@ -56,32 +55,50 @@ while True:
         # Bob applies CZ entanglement (brickwork)
         for (i,j) in edges:
             qml.CZ(wires=[i,j])
-
         return qml.state()
-    
-    dummy = apply_multi_qubit_ops()
-    
+
+    prepared_state = apply_multi_qubit_ops()  # returns state vector
+
+    # Step 2: measurement QNode using the prepared state
     dev2 = qml.device("default.qubit", wires=num_qubits, shots=1000)
 
-    # Receive delta values from Alice
+    def MBQC(delta, wire, state_vector):
+        @qml.qnode(dev2)
+        def qnode():
+            # Set the qubits to be the qubits from brickwork state
+            qml.StatePrep(state_vector, wires=range(num_qubits))
+            # Rotate then apply measurement in Z
+            qml.RZ(-delta, wires=wire)
+            qml.Hadamard(wires=wire)
+            return qml.sample(qml.PauliZ(wire))
+        return qnode()
+    # Note: This way is assuming we can "copy" unknown quantum states, but pennylane does not allow us to work on same qubits with different qnodes
+    # Also, this does not take into consideration the collapse of previous qubits.
+    '''
+    def MBQC_state(delta, wire, state_vector):
+        @qml.qnode(dev2)
+        def qnode():
+            # Set the qubits to be the qubits from brickwork state
+            qml.StatePrep(state_vector, wires=range(num_qubits))
+            # Rotate then apply measurement in Z
+            qml.RZ(-delta, wires=wire)
+            qml.Hadamard(wires=wire)
+            qml.sample(qml.PauliZ(wire))
+            return  qml.state()
+        return qnode()
+    '''
+
+    # Step 3: apply MBQC measurements
     c = 0
     for x in range(1, n+1):
         for y in range(1, m+1):
             delta = recv_json(conn)
             print(f"delta_{(x,y)} = {delta} received...")
-            
-            @qml.qnode(dev2)
-            def MBQC():
-                # Rotate basis so that measuring Z is equivalent to measuring ±δ
-                qml.RZ(-delta, wires=c)
-                qml.Hadamard(wires=c)
-                return qml.sample(qml.PauliZ(c))
-            
-            # Bob measures in the corresponding basis ...
-            results = (MBQC())
-            res = results[0]  # sample returns an array
+            res = MBQC(delta, c, prepared_state)
+            res = res[0]
             s = 0 if res == 1 else 1
             print(f"measurement result: {s}")
+            #prepared_state = MBQC_state(delta, c, prepared_state)
 
             # Bob sends result to Alice
             s_to_send = json.dumps(s)
