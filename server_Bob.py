@@ -73,8 +73,9 @@ while True:
             @qml.qnode(dev2)
             def MBQC():
                 # Rotate basis so that measuring Z is equivalent to measuring ±δ
-                qml.RY(-2*delta, wires=c)
-                return qml.sample(wires=c)
+                qml.RZ(-delta, wires=c)
+                qml.Hadamard(wires=c)
+                return qml.sample(qml.PauliZ(c))
             
             # Bob measures in the corresponding basis ...
             s = int(MBQC()[c][0])
