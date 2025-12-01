@@ -78,7 +78,9 @@ while True:
                 return qml.sample(qml.PauliZ(c))
             
             # Bob measures in the corresponding basis ...
-            s = int(MBQC()[c][0])
+            results = (MBQC())
+            res = results[0]  # sample returns an array
+            s = 0 if res == 1 else 1
             print(f"measurement result: {s}")
 
             # Bob sends result to Alice

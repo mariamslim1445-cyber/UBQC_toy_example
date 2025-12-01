@@ -34,7 +34,7 @@ for theta in theta_list:
     @qml.qnode(dev)
     def qubit_state():
         qml.Hadamard(wires=0)
-        qml.RZ(theta, wires=0)
+        qml.PhaseShift(theta, wires=0)
         return qml.state()
     state = qubit_state()
     single_qubit_states.append(state)
