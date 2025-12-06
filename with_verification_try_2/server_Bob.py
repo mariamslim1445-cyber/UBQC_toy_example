@@ -3,6 +3,11 @@ import pennylane as qml
 import numpy as np
 import json
 import socket
+import os  
+
+# Probability that Bob flips each measurement outcome
+CHEAT_FLIP_PROB = float(os.getenv("CHEAT_FLIP_PROB", "0.0"))
+print(f"[Bob] CHEAT_FLIP_PROB = {CHEAT_FLIP_PROB}")
 
 
 def recv_json(conn):
@@ -116,6 +121,11 @@ while True:
                 bit = int(np.asarray(sample).flatten()[0])
             except Exception:
                 bit = int(sample[0])
+
+             # ---- cheating hook: flip measurement outcome with probability CHEAT_FLIP_PROB ----
+            if CHEAT_FLIP_PROB > 0.0 and np.random.rand() < CHEAT_FLIP_PROB:
+                bit ^= 1
+
 
             send_json(conn, bit)
 

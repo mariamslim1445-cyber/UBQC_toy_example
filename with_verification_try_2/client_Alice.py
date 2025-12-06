@@ -6,6 +6,7 @@ import json
 import socket
 import time
 import math
+import os  # NEW
 
 # --------------------------
 # Basic MBQC parameters
@@ -49,8 +50,8 @@ def state_one():
 # --------------------------
 # Verification params
 # --------------------------
-num_traps = 3     # traps per run
-s_reps = 4        # number of repetitions (security parameter)
+num_traps = int(os.getenv("NUM_TRAPS", "3"))   # traps per run
+s_reps = int(os.getenv("S_REPS", "4"))         # repetitions (security parameter)
 
 HOST = socket.gethostbyname(socket.gethostname())
 PORT = 5050
