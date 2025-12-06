@@ -1,3 +1,4 @@
+# client_Alice_fixed.py
 import pennylane as qml
 import numpy as np
 import random
@@ -6,26 +7,30 @@ import socket
 import time
 import math
 
-# Basic parameters (original data-grid)
-n, m = 2, 5  # 2x5 grid for the original data qubits
+# --------------------------
+# Basic MBQC parameters
+# --------------------------
+n, m = 2, 5  # original grid dims
 data_num_qubits = n * m
 
-# Existing MBQC dependency lists for data qubits (unchanged)
-D_X = [[], [], [0], [1], [2], [3], [4], [5], [6], [7]]  # X dependencies per data-position index
-D_Z = [[], [], [], [], [0,3], [1,2], [2], [3], [4,7], [5,6]]  # Z dependencies per data-position index
+# Dependency lists for your brickwork flow (these should match your original)
+# Example sets (matching your previous file); adjust if your original differs
+D_X = [[], [], [0], [1], [2], [3], [4], [5], [6], [7]]
+D_Z = [[], [], [], [], [0,3], [1,2], [2], [3], [4,7], [5,6]]
 phi_list = [np.pi/4, 0, np.pi/4, 0, np.pi/4, 0, 0, 0, 0, 0]
+
 seed = 30
-
-def wrap_2pi_floor(x):
-    return x - math.floor(x / (2*math.pi)) * (2*math.pi)
-
 random.seed(seed)
 np.random.seed(seed)
 
-# Alice's secret thetas for data qubits (kept fixed across runs in this demo)
+# Alice's secret thetas for data qubits
 theta_list = [random.choice([k*np.pi/4 for k in range(8)]) for _ in range(data_num_qubits)]
 
-# Utility: prepare single-qubit state vector for |+_theta> or |0>/<1>
+# helper
+def wrap_2pi_floor(x):
+    return x - math.floor(x / (2*math.pi)) * (2*math.pi)
+
+# helper prepare single-qubit |+_theta>
 def make_plus_theta_state(theta):
     dev = qml.device("default.qubit", wires=1)
     @qml.qnode(dev)
@@ -41,181 +46,168 @@ def state_zero():
 def state_one():
     return np.array([0.707+0j, -0.707+0j])
 
-# Parameters for verification
-num_traps = 3     # number of trap wires per run (you can change)
-s_reps = 4        # number of repetitions (security parameter s)
+# --------------------------
+# Verification params
+# --------------------------
+num_traps = 3     # traps per run
+s_reps = 4        # number of repetitions (security parameter)
 
 HOST = socket.gethostbyname(socket.gethostname())
 PORT = 5050
 
-# Run the whole repetition protocol s_reps times
-all_run_data_outputs = []  # store data outputs for each run
+def recv_json(sock):
+    buffer = ""
+    while True:
+        data = sock.recv(4096).decode()
+        if not data:
+            raise ConnectionError("Connection closed")
+        buffer += data
+        if "\n" in buffer:
+            msg, buffer = buffer.split("\n", 1)
+            return json.loads(msg)
+
+# Brickwork base edges (data indices). This should match the edges Bob expects for the data graph.
+def build_base_data_edges():
+    base_edges = []
+    for i in range(2*m-2):
+        base_edges.append((i, i+2))
+    base_edges += [(4,5), (8,9)]
+    return base_edges
+
+all_run_data_outputs = []
 caught_any = False
 
 for run_idx in range(s_reps):
     print("\n=== Starting verification run", run_idx, "===")
-
-    # Build a combined list of qubits: data + traps.
     total_qubits = data_num_qubits + num_traps
 
-    # Decide trap positions randomly among the total_qubits
+    # Pick trap positions (physical positions among total_qubits)
     trap_positions = random.sample(range(total_qubits), num_traps)
     trap_positions_set = set(trap_positions)
-    print("Chosen trap positions (this run):", trap_positions)
+    print("Trap positions:", trap_positions)
 
-    # Fill positions: we need to place the data qubits in the remaining positions
+    # data_positions are physical positions reserved for data qubits
     data_positions = [i for i in range(total_qubits) if i not in trap_positions_set]
-    # data_positions length should equal data_num_qubits
     assert len(data_positions) == data_num_qubits
 
     # Map data index -> global position
     data_index_to_pos = {data_idx: data_positions[data_idx] for data_idx in range(data_num_qubits)}
 
-    # Build the single-qubit state list in global order 0..total_qubits-1
+    # Build single-qubit states in global order
     single_qubit_states = [None] * total_qubits
-    # store traps info: expected Z measurement result for each trap index
     trap_expected = {}
-    for data_idx in range(data_num_qubits):
-        pos = data_index_to_pos[data_idx]
-        single_qubit_states[pos] = make_plus_theta_state(theta_list[data_idx])
-
+    for d_idx in range(data_num_qubits):
+        pos = data_index_to_pos[d_idx]
+        single_qubit_states[pos] = make_plus_theta_state(theta_list[d_idx])
     for tpos in trap_positions:
-        # choose randomly |0> or |1>
-        chosen = random.choice([0, 1])
+        chosen = random.choice([0,1])
         single_qubit_states[tpos] = state_zero() if chosen == 0 else state_one()
         trap_expected[tpos] = chosen
-    # convert states to sendable JSON format
+
+    # Convert states to JSON-able list-of-[real,imag]
     data_to_send = []
     for state in single_qubit_states:
-        state_list = [[amp.real, amp.imag] for amp in state]
-        data_to_send.append(state_list)
+        data_to_send.append([[float(amp.real), float(amp.imag)] for amp in state])
 
-    # Build an edges list for entanglement that includes only edges between **data** qubits mapped into their global positions.
-    # We convert the brickwork edges (for the data grid) into edges in the global indexing.
+    # Build edges mapping data-index edges -> global positions
+    base_edges_data_index = build_base_data_edges()
     edges = []
-    # recreate the edges for the original data grid (same logic as your original server's edges building)
-    # Here we assume the brickwork edges as in your original server: edges between certain pairs of data indices.
-    # We'll map those data-index edges into the permuted global positions.
-    base_edges_data_index = []
-    # replicate construction used earlier in server_Bob.py: (this is the same brickwork as before)
-    for i in range(2*m-2):
-        base_edges_data_index.append((i, i+2))
-    base_edges_data_index += [(4,5), (8,9)]
-    # map them
     for (a, b) in base_edges_data_index:
         ga = data_index_to_pos[a]
         gb = data_index_to_pos[b]
         edges.append((ga, gb))
 
-    # Connect to Bob and run MBQC for this run
+    # Build the interleaved measurement sequence:
+    # Start with logical data-order entries, then insert traps at random positions into that sequence.
+    # Each sequence entry is a tuple (kind, data_idx_or_None, global_pos)
+    sequence = [("data", d_idx, data_index_to_pos[d_idx]) for d_idx in range(data_num_qubits)]
+    # Insert each trap at a random insertion point
+    for tpos in trap_positions:
+        insert_at = random.randint(0, len(sequence))
+        sequence.insert(insert_at, ("trap", None, tpos))
+
+    # Connect to Bob and execute sequence
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.connect((HOST, PORT))
-
-        # Send qubits
+        # send qubits and edges
         s.sendall((json.dumps(data_to_send) + "\n").encode())
-        time.sleep(0.05)
-
-        # Send edges spec
+        time.sleep(0.02)
         s.sendall((json.dumps(edges) + "\n").encode())
-        time.sleep(0.05)
+        time.sleep(0.02)
 
-        # Now follow the MBQC measurement order over the grid **in the original ordering of data qubits**
-        # But we must issue a measurement (delta) for every global position 0..total_qubits-1 in consistent order.
-        # For data qubits we compute phi_prime using dependencies in terms of original data-index ordering,
-        # but need to translate cum_results from global positions.
-        cum_results_global = {}  # map global position -> classical corrected measurement (0/1)
-        # We will iterate through the original data order (x,y as before) to ensure deterministic dependencies
-        c = 0  # data index counter for the original grid order
-        # We'll also need to make sure we send measurement deltas for trap wires at the appropriate times:
-        # A simple approach: measure in increasing global index order 0..total_qubits-1
-        # To keep your determinism and dependency structure close to original, we'll do this:
-        for global_index in range(total_qubits):
-            # Check whether this global index corresponds to a data qubit or trap
-            if global_index in trap_positions_set:
-                # For a trap: we ask Bob to measure in Z basis.
-                # To request a Z-basis measurement in MBQC using the ±δ basis trick,
-                # set delta = 0 (then rotating by -2*delta = 0 does nothing) and Bob measures Z directly.
-                r = random.choice([0, 1])
-                delta = 0.0 + math.pi * r  # adding pi*r is equivalent to a one-time flip and is corrected by r later
-                delta = wrap_2pi_floor(delta)
-                # send delta to Bob
-                s.sendall((json.dumps(delta) + "\n").encode())
-                # receive measurement result
-                result = s.recv(4096).decode()
-                result = json.loads(result)
-                corrected = r ^ int(result)
-                cum_results_global[global_index] = corrected
-                print(f"[TRAP] pos {global_index}: expected {trap_expected[global_index]}, measured {corrected}")
+        cum_results_global = {}  # map physical position -> corrected measurement bit
+
+        # Execute each measurement in the interleaved sequence
+        for entry in sequence:
+            kind, data_idx, gpos = entry
+            if kind == "trap":
+                # For a trap: ask Bob to measure in Z basis, but blind with random r
+                r = random.choice([0,1])
+                # delta = 0 + pi*r (pi*r flips the measurement; will be corrected by r)
+                delta = wrap_2pi_floor(math.pi * r)
+                # send measurement request as dict {'delta': float, 'target': int}
+                s.sendall((json.dumps({'delta': delta, 'target': int(gpos)}) + "\n").encode())
+                # receive result (0/1)
+                raw = recv_json(s)
+                measured = int(raw)
+                corrected = r ^ measured
+                cum_results_global[gpos] = corrected
+                print(f"[TRAP measured] pos {gpos}: blinded r={r}, raw={measured}, corrected={corrected}")
             else:
-                # This is a data/qubit; find its data-index c
-                # find data_idx such that data_index_to_pos[data_idx] == global_index
-                data_idx = None
-                # (small linear search; data_num_qubits is small)
-                for ddx, pos in data_index_to_pos.items():
-                    if pos == global_index:
-                        data_idx = ddx
-                        break
-                if data_idx is None:
-                    raise RuntimeError("Couldn't find data index for position", global_index)
-                # compute s_x and s_z from previously-corrected classical results of dependencies
+                # Data qubit measured in logical order: compute phi' from dependencies referring to data indices
                 s_x = 0
                 s_z = 0
-                for i_dep in D_X[data_idx]:
-                    # dependency i_dep refers to a data-index earlier in the original ordering
-                    # get its global pos and look up cum_results
-                    dep_global_pos = data_index_to_pos[i_dep]
-                    s_x ^= cum_results_global[dep_global_pos]
-                for i_dep in D_Z[data_idx]:
-                    dep_global_pos = data_index_to_pos[i_dep]
-                    s_z ^= cum_results_global[dep_global_pos]
+                for dep in D_X[data_idx]:
+                    dep_global = data_index_to_pos[dep]
+                    s_x ^= cum_results_global[dep_global]
+                for dep in D_Z[data_idx]:
+                    dep_global = data_index_to_pos[dep]
+                    s_z ^= cum_results_global[dep_global]
                 phi_prime = ((-1) ** s_x) * phi_list[data_idx] + s_z * np.pi
+                # keep phi_prime correctly (removed debug override that set phi_prime to 0.0)
                 phi_prime = wrap_2pi_floor(phi_prime)
+
                 r = random.choice([0,1])
-                delta = theta_list[data_idx] + phi_prime + np.pi * r
-                delta = wrap_2pi_floor(delta)
-                # send delta
-                s.sendall((json.dumps(delta) + "\n").encode())
-                # receive measurement result
-                result = s.recv(4096).decode()
-                result = json.loads(result)
-                corrected = r ^ int(result)
-                cum_results_global[global_index] = corrected
-                print(f"[DATA] data_idx {data_idx} at pos {global_index}: corrected result {corrected}")
+                delta = wrap_2pi_floor(theta_list[data_idx] + phi_prime + math.pi * r)
+                s.sendall((json.dumps({'delta': delta, 'target': int(gpos)}) + "\n").encode())
+                raw = recv_json(s)
+                measured = int(raw)
+                corrected = r ^ measured
+                cum_results_global[gpos] = corrected
+                print(f"[DATA measured] data_idx {data_idx} @ pos {gpos}: corrected={corrected}")
 
-        # After finishing measuring all wires in this run, extract the classical outputs for data qubits
-        # The "classical output" is the list of cum_results for the data qubits in original ordering
+        # signal end of run to server (optional)
+        s.sendall((json.dumps({'stop': True}) + "\n").encode())
+
+        # Extract classical data outputs (in original data ordering)
         data_output = [cum_results_global[data_index_to_pos[i]] for i in range(data_num_qubits)]
-        print("This run's data output (original ordering):", data_output)
+        print("This run's data output:", data_output)
 
-        # Check traps correctness
+        # Check traps
         trap_fail = False
         for tpos, expected in trap_expected.items():
             measured = cum_results_global[tpos]
             if measured != expected:
-                print(f"Trap at position {tpos} FAILED: expected {expected}, got {measured}")
+                print(f"Trap at pos {tpos} FAILED: expected {expected} got {measured}")
                 trap_fail = True
         if trap_fail:
-            print("Alice detected cheating in this run!")
+            print("Alice detected cheating this run.")
             caught_any = True
-            # still record the data output (could be ignored); but breaking is optional. We'll continue repetitions per specification.
         else:
-            print("All traps ok in this run.")
+            print("All traps OK this run.")
 
         all_run_data_outputs.append(data_output)
-        # connection will close automatically at end of with-block
 
-# After s_reps runs: decide acceptance
+# After s_reps: final decision
 print("\n=== Protocol complete ===")
 if caught_any:
-    print("Alice rejects: cheating was detected in at least one repetition.")
+    print("Alice rejects: cheating detected in at least one repetition.")
 else:
-    # Check all data outputs are identical across runs
     all_equal = all(out == all_run_data_outputs[0] for out in all_run_data_outputs)
     if all_equal:
         print("Alice accepts: no traps failed and all outputs identical.")
         print("Accepted classical output:", all_run_data_outputs[0])
     else:
         print("Alice rejects: outputs differ across repetitions.")
-        print("Run outputs were:")
         for i, out in enumerate(all_run_data_outputs):
             print(f"  Run {i}: {out}")

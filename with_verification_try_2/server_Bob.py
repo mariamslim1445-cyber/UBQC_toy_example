@@ -1,7 +1,9 @@
+# server_Bob_fixed.py
 import pennylane as qml
 import numpy as np
 import json
 import socket
+
 
 def recv_json(conn):
     """Receive a full JSON message terminated by newline."""
@@ -15,86 +17,110 @@ def recv_json(conn):
             msg, buffer = buffer.split("\n", 1)
             return json.loads(msg)
 
-server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-server.bind((socket.gethostbyname(socket.gethostname()), 5050))
-server.listen()
 
-print("Bob (server) ready, waiting for Alice...")
+def send_json(conn, obj):
+    conn.sendall((json.dumps(obj) + "\n").encode())
+
+HOST = socket.gethostbyname(socket.gethostname())
+PORT = 5050
+
+server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+server.bind((HOST, PORT))
+server.listen()
+print("Bob (server) ready on", HOST, "port", PORT)
 
 while True:
     conn, addr = server.accept()
-    print("Connection established. Client's address:", addr)
+    print("Connection established from", addr)
+    try:
+        # Receive Alice's qubit list (list of single-qubit states)
+        received_qubits_json = recv_json(conn)
+        # reconstruct complex state vectors
+        reconstructed_states = [np.array([complex(r, i) for r, i in state]) for state in received_qubits_json]
+        num_qubits = len(reconstructed_states)
+        print(f"Received {num_qubits} single-qubit states from Alice.")
 
-    # Receive Alice's qubits (list of single-qubit states)
-    received_qubits_json = recv_json(conn)
-    reconstructed_states = [np.array([complex(r, i) for r, i in state]) for state in received_qubits_json]
+        # Receive entanglement edges
+        edges = recv_json(conn)
+        print("Received edges:", edges)
 
-    print("Received states from Alice:")
-    for i, state in enumerate(reconstructed_states):
-        print(f"  Qubit {i}: {state}")
+        # Devices
+        dev_meas = qml.device("default.qubit", wires=num_qubits, shots=1)
 
-    num_qubits = len(reconstructed_states)
-    print("Number of qubits received:", num_qubits)
+        # Helper: prepare each single-qubit state exactly matching Alice's convention
+        # Alice prepares states as: H then RZ(theta) on |0> (i.e. |+_theta> = RZ(theta) H |0>).
+        # If the two amplitudes have equal magnitude (within tol), we can recover theta from
+        # the phase difference: theta = angle(amp1) - angle(amp0), and prepare with H then RZ(theta).
+        # Otherwise, fall back to a general reconstruction via RY and RZ.
+        def prepare_state_on_wires(qnode_dev):
+            @qml.qnode(qnode_dev)
+            def _prepare_and_measure(target, delta, edges_local):
+                # Prepare every qubit from reconstructed_states
+                for i, state_vector in enumerate(reconstructed_states):
+                    amp0, amp1 = state_vector
+                    mag0 = np.abs(amp0)
+                    mag1 = np.abs(amp1)
+                    # tolerance for "equal magnitudes"
+                    if np.isclose(mag0, mag1, atol=1e-6):
+                        # compute phase difference
+                        phase = (np.angle(amp1) - np.angle(amp0))
+                        # Prepare |+> then apply RZ(phase)
+                        qml.Hadamard(wires=i)
+                        qml.RZ(phase, wires=i)
+                    else:
+                        # General construction: convert state vector to Bloch angles
+                        # state = cos(theta/2)|0> + e^{i phi} sin(theta/2)|1>
+                        theta_bloch = 2 * np.arccos(np.clip(mag0, -1.0, 1.0))
+                        # relative phase between amplitudes
+                        phi_rel = np.angle(amp1) - np.angle(amp0)
+                        qml.RY(theta_bloch, wires=i)
+                        qml.RZ(phi_rel, wires=i)
+                # Apply CZ edges
+                for (p, q) in edges_local:
+                    qml.CZ(wires=[p, q])
 
-    # Receive edges specification for entanglement from Alice
-    edges = recv_json(conn)
-    print("Received edges for entanglement:", edges)
+                # Rotate target to Z-basis according to delta and measure
+                # Alice expects Bob to perform RZ(-delta) then H then measure Z
+                qml.RZ(-delta, wires=target)
+                qml.Hadamard(wires=target)
+                return qml.sample(wires=target)
+            return _prepare_and_measure
 
-    # Create devices
-    dev_prep = qml.device("default.qubit", wires=num_qubits)
-    dev_meas = qml.device("default.qubit", wires=num_qubits, shots=1)
+        # Create a qnode factory for measurement where we pass target and delta each time
+        measure_qnode = prepare_state_on_wires(dev_meas)
 
-    @qml.qnode(dev_prep)
-    def prepare_all():
-        # initialize each qubit individually from received single-qubit state
-        for i, state_vector in enumerate(reconstructed_states):
-            alpha, beta = state_vector
-            # Convert statevector to RY + RZ rotations (avoid direct state injection to stick with pennylane ops)
-            # If alpha is complex or magnitude issues arise, this simple approach still reconstructs the state for normalized single-qubit vectors.
-            # Handle edge cases: alpha might be 0 or 1
-            amp0 = alpha
-            amp1 = beta
-            # if amplitude is (a + 0j) real, arccos may get numerical issues; clip
-            theta = 2 * np.arccos(np.clip(np.abs(amp0), -1.0, 1.0))
-            qml.RY(theta, wires=i)
-            # add appropriate phase rotation
-            phase = np.angle(amp1) - np.angle(amp0)
-            qml.RZ(phase, wires=i)
-        # Apply the entangling CZs according to edges provided by Alice
-        for (p, q) in edges:
-            qml.CZ(wires=[p, q])
-        return qml.state()
+        # We'll respond to measurement deltas one-by-one
+        while True:
+            try:
+                delta_msg = recv_json(conn)
+            except ConnectionError:
+                print("Connection closed by client.")
+                break
 
-    _ = prepare_all()  # we only need the device state after preparation and entanglement
+            # stop flag
+            if isinstance(delta_msg, dict) and 'stop' in delta_msg and delta_msg['stop']:
+                break
 
-    # For each qubit, receive delta and perform measurement in that basis; send back binary measurement result
-    for q_index in range(num_qubits):
-        delta = recv_json(conn)
-        # perform measurement on wire q_index in the basis ±δ (we use the trick RY(-2*delta) then measure Z)
-        @qml.qnode(dev_meas)
-        def measure_one():
-            # NOTE: device is freshly created; we need to re-prepare full state on it
-            for i, state_vector in enumerate(reconstructed_states):
-                amp0, amp1 = state_vector
-                theta = 2 * np.arccos(np.clip(np.abs(amp0), -1.0, 1.0))
-                qml.RY(theta, wires=i)
-                phase = np.angle(amp1) - np.angle(amp0)
-                qml.RZ(phase, wires=i)
-            for (p, q) in edges:
-                qml.CZ(wires=[p, q])
-            # Rotate target wire so Z-measurement gives ±δ outcome
-            qml.RZ(-delta, wires=q_index)
-            qml.Hadamard(wires=q_index)
-            return qml.sample(wires=q_index)
+            if not (isinstance(delta_msg, dict) and 'delta' in delta_msg and 'target' in delta_msg):
+                print("Invalid measurement request:", delta_msg)
+                break
 
-        sample = measure_one()
-        # sample is an array-like with a single shot; convert to int 0/1
-        s = int(sample[0][0]) if hasattr(sample[0], "__len__") else int(sample[0])
-        print(f"Measured qubit {q_index} with delta={delta} -> {s}")
+            delta = float(delta_msg['delta'])
+            target = int(delta_msg['target'])
 
-        # send result back to Alice as an integer encoded as JSON with newline termination
-        to_send = json.dumps(s) + "\n"
-        conn.send(to_send.encode())
+            # perform measurement (this qnode will reprepare full state + edges each call)
+            sample = measure_qnode(target, delta, edges)
 
-    print("Completed run, closing connection.")
-    conn.close()
+            # normalize result retrieval for pennylane shapes
+            try:
+                bit = int(np.asarray(sample).flatten()[0])
+            except Exception:
+                bit = int(sample[0])
+
+            send_json(conn, bit)
+
+    except Exception as e:
+        print("Server error:", e)
+    finally:
+        conn.close()
+        print("Connection closed, ready for next client.")
