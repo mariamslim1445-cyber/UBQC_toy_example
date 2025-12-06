@@ -51,7 +51,7 @@ def state_one():
 # Verification params
 # --------------------------
 num_traps = int(os.getenv("NUM_TRAPS", "3"))   # traps per run
-s_reps = int(os.getenv("S_REPS", "4"))         # repetitions (security parameter)
+s_reps = int(os.getenv("S_REPS", "1"))         # repetitions (security parameter)
 
 HOST = socket.gethostbyname(socket.gethostname())
 PORT = 5050
@@ -200,6 +200,7 @@ for run_idx in range(s_reps):
         all_run_data_outputs.append(data_output)
 
 # After s_reps: final decision
+'''
 print("\n=== Protocol complete ===")
 if caught_any:
     print("Alice rejects: cheating detected in at least one repetition.")
@@ -212,3 +213,10 @@ else:
         print("Alice rejects: outputs differ across repetitions.")
         for i, out in enumerate(all_run_data_outputs):
             print(f"  Run {i}: {out}")
+'''
+
+print("\n=== Protocol complete ===")
+if caught_any:
+    print("Alice rejects: cheating detected in at least one repetition.")
+else:
+    print("Alice accepts: no traps failed.")

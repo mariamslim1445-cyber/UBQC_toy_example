@@ -6,8 +6,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Adjust these if your filenames are different
-ALICE_SCRIPT = "client_Alice_fixed.py"
-BOB_SCRIPT = "server_Bob_fixed.py"
+ALICE_SCRIPT = "with_verification_try_2\client_Alice.py"
+BOB_SCRIPT = "with_verification_try_2\server_Bob.py"
 
 HOST = None  # both scripts already agree on host/port internally
 PORT = 5050  # kept only as a reminder
@@ -53,9 +53,9 @@ def run_one_protocol(num_traps, s_reps):
 def main():
     # grid of parameters
     trap_values = [0, 1, 2, 3, 4, 5]          # number of traps (T)
-    cheat_probs = [0.05, 0.1, 0.2, 0.3, 0.4]  # CHEAT_FLIP_PROB = p_dev
+    cheat_probs = [0, 0.05, 0.1, 0.2, 0.3, 0.4]  # CHEAT_FLIP_PROB = p_dev
     s_reps = 1                                 # repetitions per protocol (as in your client)
-    runs_per_point = 20                        # full protocols per (T, p_dev) -> tune this
+    runs_per_point = 10                        # full protocols per (T, p_dev) -> tune this
 
     empirical = np.zeros((len(trap_values), len(cheat_probs)))
     theory = np.zeros_like(empirical)
@@ -69,6 +69,7 @@ def main():
                 accepts = 0
                 for run in range(runs_per_point):
                     ok, out = run_one_protocol(T, s_reps)
+                    #print(out)
                     if ok:
                         accepts += 1
                 empirical[i, j] = accepts / runs_per_point

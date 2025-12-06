@@ -6,7 +6,7 @@ import socket
 import os  
 
 # Probability that Bob flips each measurement outcome
-CHEAT_FLIP_PROB = float(os.getenv("CHEAT_FLIP_PROB", "0.0"))
+CHEAT_FLIP_PROB = float(os.getenv("CHEAT_FLIP_PROB"))
 print(f"[Bob] CHEAT_FLIP_PROB = {CHEAT_FLIP_PROB}")
 
 
